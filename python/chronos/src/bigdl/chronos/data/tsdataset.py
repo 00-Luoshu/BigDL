@@ -49,8 +49,10 @@ class TSDataset:
 
         self.numpy_x = None
         self.numpy_y = None
-        self.roll_feature = None
-        self.roll_target = None
+        self.lookback = None  # lookback stated by users if they called roll, to_torch_data_loader
+        self.horizon = None  # horizon stated by users if they called roll, to_torch_data_loader
+        self.roll_feature = None  # contains feature_col requested by roll/to_torch_data_loader
+        self.roll_target = None  # contains target_col requested by roll/to_torch_data_loader
         self.roll_feature_df = None
         self.roll_additional_feature = None
         self.scaler = None
@@ -603,20 +605,21 @@ class TSDataset:
         roll_feature_df = None if self.roll_feature_df is None \
             else self.roll_feature_df[additional_feature_col]
 
+        self.lookback, self.horizon = lookback, horizon
         # horizon_time is only for time_enc, the time_enc numpy ndarray won't have any
         # shape change when the dataset is for prediction.
-        horizon_time = horizon
+        horizon_time = self.horizon
         if is_predict:
-            horizon = 0
+            self.horizon = 0
 
-        if lookback == 'auto':
-            lookback = self.get_cycle_length('mode', top_k=3)
+        if self.lookback == 'auto':
+            self.lookback = self.get_cycle_length('mode', top_k=3)
         rolling_result = \
             self.df.groupby([self.id_col]) \
                 .apply(lambda df: roll_timeseries_dataframe(df=df,
                                                             roll_feature_df=roll_feature_df,
-                                                            lookback=lookback,
-                                                            horizon=horizon,
+                                                            lookback=self.lookback,
+                                                            horizon=self.horizon,
                                                             feature_col=feature_col,
                                                             target_col=target_col,
                                                             label_len=label_len))
@@ -678,7 +681,7 @@ class TSDataset:
 
     def to_torch_data_loader(self,
                              batch_size=32,
-                             roll=False,
+                             roll=True,
                              lookback='auto',
                              horizon=None,
                              feature_col=None,
@@ -689,14 +692,14 @@ class TSDataset:
                              is_predict=False):
         """
         Convert TSDataset to a PyTorch DataLoader with or without rolling. We recommend to use
-        to_torch_data_loader(roll=True) if you don't need to output the rolled numpy array. It is
-        much more efficient than rolling separately, especially when the dataframe or lookback
+        to_torch_data_loader(default roll=True) if you don't need to output the rolled numpy array.
+        It is much more efficient than rolling separately, especially when the dataframe or lookback
         is large.
 
         :param batch_size: int, the batch_size for a Pytorch DataLoader. It defaults to 32.
         :param roll: Boolean. Whether to roll the dataframe before converting to DataLoader.
                If True, you must also specify lookback and horizon for rolling. If False, you must
-               have called tsdataset.roll() before calling to_torch_data_loader(). Default to False.
+               have called tsdataset.roll() before calling to_torch_data_loader(). Default to True.
         :param lookback: int, lookback value. Default to 'auto',
                the mode of time series' cycle length will be taken as the lookback.
         :param horizon: int or list,
@@ -739,14 +742,13 @@ class TSDataset:
         >>>                                                      "extra feature 2"])
         >>> horizon, lookback = 1, 1
         >>> data_loader = tsdataset.to_torch_data_loader(batch_size=32,
-        >>>                                              roll=True,
         >>>                                              lookback=lookback,
         >>>                                              horizon=horizon)
         >>> # or roll outside. That might be less efficient than the way above.
         >>> tsdataset.roll(lookback=lookback, horizon=horizon, id_sensitive=False)
         >>> x, y = tsdataset.to_numpy()
         >>> print(x, y) # x = [[[1.9, 1, 2 ]], [[2.3, 0, 9 ]]] y = [[[ 2.4 ]], [[ 2.6 ]]]
-        >>> data_loader = tsdataset.to_torch_data_loader(batch_size=32)
+        >>> data_loader = tsdataset.to_torch_data_loader(batch_size=32, roll=False)
 
         """
         from torch.utils.data import TensorDataset, DataLoader
@@ -755,7 +757,7 @@ class TSDataset:
         if roll:
             if horizon is None:
                 invalidInputError(False,
-                                  "You must input horizon if roll is True")
+                                  "You must input horizon if roll is True (default roll=True)!")
             from bigdl.chronos.data.utils.roll_dataset import RollDataset
             feature_col = _to_list(feature_col, "feature_col") if feature_col is not None \
                 else self.feature_col
@@ -764,20 +766,40 @@ class TSDataset:
 
             # set scaler index for unscale_numpy
             self.scaler_index = [self.target_col.index(t) for t in target_col]
+            self.lookback, self.horizon = lookback, horizon
 
-            if lookback == 'auto':
-                lookback = self.get_cycle_length('mode', top_k=3)
+            if self.lookback == 'auto':
+                self.lookback = self.get_cycle_length('mode', top_k=3)
+            invalidInputError(not self._has_generate_agg_feature,
+                              "Currently to_torch_data_loader does not support "
+                              "'gen_global_feature' and 'gen_rolling_feature' methods.")
+
+            if isinstance(self.horizon, int):
+                need_dflen = self.lookback + self.horizon
+            else:
+                need_dflen = self.lookback + max(self.horizon)
+            if len(self.df) < need_dflen:
+                invalidInputError(False,
+                                  "The length of the dataset must be larger than the sum "
+                                  "of lookback and horizon, while get lookback+horizon="
+                                  f"{need_dflen} and the length of dataset is {len(self.df)}.")
+
             torch_dataset = RollDataset(self.df,
                                         dt_col=self.dt_col,
                                         freq=self._freq,
-                                        lookback=lookback,
-                                        horizon=horizon,
+                                        lookback=self.lookback,
+                                        horizon=self.horizon,
                                         feature_col=feature_col,
                                         target_col=target_col,
                                         id_col=self.id_col,
                                         time_enc=time_enc,
                                         label_len=label_len,
                                         is_predict=is_predict)
+            # TODO gen_rolling_feature and gen_global_feature will be support later
+            self.roll_target = target_col
+            self.roll_feature = feature_col
+
+            batch_size = 32 if batch_size is None else batch_size  # _pytorch_fashion_inference
             return DataLoader(torch_dataset,
                               batch_size=batch_size,
                               shuffle=shuffle)
@@ -785,7 +807,7 @@ class TSDataset:
             if self.numpy_x is None:
                 invalidInputError(False,
                                   "Please call 'roll' method before transforming a TSDataset to "
-                                  "torch DataLoader without rolling (default roll=False)!")
+                                  "torch DataLoader if roll is False!")
             x, y = self.to_numpy()
             return DataLoader(TensorDataset(torch.from_numpy(x).float(),
                                             torch.from_numpy(y).float()),
@@ -809,9 +831,12 @@ class TSDataset:
                               "Please call 'roll' method "
                               "before transform a TSDataset to tf dataset!")
         data = tf.data.Dataset.from_tensor_slices((self.numpy_x, self.numpy_y))
+        batch_size = 32 if batch_size is None else batch_size
         if shuffle:
-            data = data.shuffle(self.numpy_x.shape[0])
-        return data.cache().batch(batch_size).prefetch(tf.data.AUTOTUNE)
+            data = data.cache().shuffle(self.numpy_x.shape[0]).batch(batch_size)
+        else:
+            data = data.batch(batch_size).cache()
+        return data.prefetch(tf.data.AUTOTUNE)
 
     def to_numpy(self):
         '''

@@ -30,6 +30,7 @@ from bigdl.orca.learn.utils import maybe_dataframe_to_xshards, dataframe_to_xsha
 from bigdl.orca.ray import OrcaRayContext
 from bigdl.orca.learn.ray_estimator import Estimator as OrcaRayEstimator
 from bigdl.dllib.utils.file_utils import enable_multi_fs_load, enable_multi_fs_save
+from bigdl.orca.learn.pytorch.utils import find_free_port
 
 import ray
 from ray.exceptions import RayActorError
@@ -88,6 +89,15 @@ def partition_refs_to_creator(partition_refs):
         return data_loader
 
     return data_creator
+
+
+def get_driver_node_ip():
+    """
+    Returns the IP address of the current node.
+
+    :return: the IP address of the current node.
+    """
+    return ray._private.services.get_node_ip_address()
 
 
 class PyTorchRayEstimator(OrcaRayEstimator):
@@ -154,6 +164,7 @@ class PyTorchRayEstimator(OrcaRayEstimator):
         )
 
         if backend == "ray":
+            import torch.distributed as dist
             cores_per_node = ray_ctx.ray_node_cpu_cores // workers_per_node
             num_nodes = ray_ctx.num_ray_nodes * workers_per_node
             RemoteRunner = ray.remote(num_cpus=cores_per_node)(PytorchRayWorker)
@@ -165,13 +176,15 @@ class PyTorchRayEstimator(OrcaRayEstimator):
                 for i, worker in enumerate(self.remote_workers)
             ])
 
-            head_worker = self.remote_workers[0]
-            address = ray.get(head_worker.setup_address.remote())
+            driver_ip = get_driver_node_ip()
+            driver_tcp_store_port = find_free_port()
 
-            logger.info(f"initializing pytorch process group on {address}")
+            _ = dist.TCPStore(driver_ip, driver_tcp_store_port, -1, True,
+                              dist.constants.default_pg_timeout)
 
             ray.get([
-                worker.setup_torch_distribute.remote(address, i, num_nodes)
+                worker.setup_torch_distribute.remote(
+                    driver_ip, driver_tcp_store_port, i, num_nodes)
                 for i, worker in enumerate(self.remote_workers)
             ])
 

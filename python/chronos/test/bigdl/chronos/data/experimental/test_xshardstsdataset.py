@@ -31,8 +31,9 @@ from numpy.testing import assert_array_almost_equal
 
 
 def generate_spark_df():
-    init_orca_context(cores=8)
     sc = OrcaContext.get_spark_context()
+    from pyspark.sql import SparkSession
+    spark = SparkSession(sc)
     rdd = sc.range(0, 100)
     from pyspark.ml.linalg import DenseVector
     df = rdd.map(lambda x: (DenseVector(np.random.randn(1, ).astype(np.float)),
@@ -59,6 +60,9 @@ def get_ugly_ts_df():
 class TestXShardsTSDataset(TestCase):
 
     def setUp(self):
+        # In read_csv module, the initialized sc cannot be used normally
+        # Here, force initialize
+        init_orca_context(cores=8)
         self.resource_path = os.path.join(os.path.split(__file__)[0], "../../resources/")
 
     def tearDown(self):
@@ -208,6 +212,75 @@ class TestXShardsTSDataset(TestCase):
         x = np.concatenate([collected_numpy[i]['x'] for i in range(len(collected_numpy))], axis=0)
         assert x.shape == ((50-lookback-horizon+1)*2, lookback, 2)
 
+    def test_xshardstsdataset_scale_unscale(self):
+        from sklearn.preprocessing import StandardScaler
+        scalers = [{0: StandardScaler(), 1: StandardScaler()}]
+        df = pd.read_csv(os.path.join(self.resource_path, "multiple.csv"))
+        for scaler in scalers:
+            shards_multiple = read_csv(os.path.join(self.resource_path, "multiple.csv"))
+            shards_multiple_test = read_csv(os.path.join(self.resource_path, "multiple.csv"))
+
+            tsdata = XShardsTSDataset.from_xshards(shards_multiple, dt_col="datetime",
+                                                   target_col="value",
+                                                   extra_feature_col=["extra feature"], id_col="id")
+            tsdata_test = XShardsTSDataset.from_xshards(shards_multiple_test, dt_col="datetime",
+                                                        target_col="value",
+                                                        extra_feature_col=["extra feature"], id_col="id")
+
+            tsdata.scale(scaler)
+            tsdata_test.scale(scaler, fit=False)
+
+            def get_local_df(tsdata):
+                collected_df = tsdata.shards.collect()
+                collected_df = pd.concat(collected_df, axis=0)
+                collected_df.reset_index(inplace=True)
+                collected_df["datetime"] = df["datetime"]
+                del collected_df["index"]
+                return collected_df
+
+            df_train = get_local_df(tsdata)
+            df_test = get_local_df(tsdata_test)
+            assert_frame_equal(df_train, df_test)
+
+            with pytest.raises(AssertionError):
+                assert_frame_equal(df_train, df)
+                assert_frame_equal(df_test, df)
+
+            tsdata.unscale()
+            df_train_unscale = get_local_df(tsdata)
+            assert_frame_equal(df_train_unscale, df)
+            
+    def test_xshardstsdataset_unscale_numpy(self):
+        from sklearn.preprocessing import  StandardScaler, MaxAbsScaler, MinMaxScaler, RobustScaler
+        scalers = [{0: StandardScaler(), 1: StandardScaler()}, 
+                   {0: MaxAbsScaler(), 1: MaxAbsScaler()},
+                   {0: MinMaxScaler(), 1: MinMaxScaler()},
+                   {0: RobustScaler(), 1: RobustScaler()}]
+        for scaler in scalers:
+            shards_multiple = read_csv(os.path.join(self.resource_path, "multiple.csv"))
+
+            tsdata = XShardsTSDataset.from_xshards(shards_multiple, dt_col="datetime",
+                                                   target_col="value",
+                                                   extra_feature_col=["extra feature"], id_col="id")
+
+            ori_tsdata = XShardsTSDataset.from_xshards(shards_multiple, dt_col="datetime",
+                                                   target_col="value",
+                                                   extra_feature_col=["extra feature"], id_col="id")
+            horizon = random.randint(1, 10)
+            lookback = random.randint(1, 20)
+            ori_tsdata.roll(horizon=horizon, lookback=lookback)
+            ori_arr_shards = ori_tsdata.to_xshards().collect()
+            ori_arr_shards = [arr['y'] for arr in ori_arr_shards]
+            ori_y = np.concatenate(ori_arr_shards, axis=0)
+            tsdata.scale(scaler)
+            tsdata.roll(horizon=horizon, lookback=lookback)
+
+            scale_arr = tsdata.to_xshards()
+            numpy_tsdata = tsdata.unscale_xshards(scale_arr, 'y')
+            numpy_tsdata = numpy_tsdata.collect()
+            y = np.concatenate(numpy_tsdata, axis=0)
+            assert_array_almost_equal(ori_y, y)
+
     def test_xshardstsdataset_impute(self):
         from tempfile import TemporaryDirectory
         tmp_df = get_ugly_ts_df()
@@ -235,11 +308,14 @@ class TestXShardsTSDataset(TestCase):
                                                target_col="feature",
                                                id_col="id")
         tsdata.roll(lookback=4, horizon=2)
-        data = tsdata.to_xshards().collect()
-        assert data[0]['x'].shape[1] == 4
-        assert data[0]['x'].shape[2] == 1
-        assert data[0]['y'].shape[1] == 2
-        assert data[0]['y'].shape[2] == 1
+        data = tsdata.to_xshards(partition_num=5)
+        data_collected = data.collect()
+        assert data_collected[0]['x'].shape[1] == 4
+        assert data_collected[0]['x'].shape[2] == 1
+        assert data_collected[0]['y'].shape[1] == 2
+        assert data_collected[0]['y'].shape[2] == 1
+        assert data.num_partitions() == 5
+        assert "id" in data.collect()[0].keys()
         assert tsdata.shards.num_partitions() == 2
 
         # with only 1 id

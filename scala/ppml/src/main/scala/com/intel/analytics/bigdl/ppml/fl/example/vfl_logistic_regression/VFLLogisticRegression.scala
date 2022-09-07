@@ -74,7 +74,7 @@ object VFLLogisticRegression extends DebugLogger{
     /**
      * Usage of BigDL PPML starts from here
      */
-    FLContext.initFLContext()
+    FLContext.initFLContext(argv.clientId)
     val pSI = new PSI()
     val (trainData, valData, testData) = getData(pSI, dataPath, rowKeyName)
 

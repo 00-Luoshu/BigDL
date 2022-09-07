@@ -61,13 +61,12 @@ public abstract class Aggregator {
 
     public abstract void aggregate(FLPhase flPhase);
 
-    public void putClientData(FLPhase flPhase,
-                                  String clientUUID, int version, DataHolder dataHolder)
+    public void putClientData(FLPhase flPhase, int clientUUID, int version, DataHolder dataHolder)
             throws IllegalArgumentException, InterruptedException {
         StorageHolder storageHolder = aggregateTypeMap.get(flPhase);
         synchronized (this) {
             storageHolder.putClientData(clientUUID, dataHolder);
-            logger.debug(clientUUID + " uploaded. Server received: " + flPhase + " " +
+            logger.info(clientUUID + " uploaded. Server received: " + flPhase + " " +
                     storageHolder.getClientDataSize() + "/" + clientNum + ", version: " + version);
             if (storageHolder.getClientDataSize() >= clientNum) {
                 logger.debug("Server start aggregate: " + flPhase);

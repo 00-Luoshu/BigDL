@@ -21,7 +21,7 @@ import tempfile
 import os
 import shutil
 
-from bigdl.orca.test_zoo_utils import ZooTestCase
+from unittest import TestCase
 from bigdl.chronos.data import TSDataset
 
 from pandas.testing import assert_frame_equal
@@ -64,9 +64,9 @@ def get_ugly_ts_df():
     return df
 
 
-def get_int_target_df():
+def get_int_target_df(freq="D"):
     sample_num = np.random.randint(100, 200)
-    train_df = pd.DataFrame({"datetime": pd.date_range('1/1/2019', periods=sample_num),
+    train_df = pd.DataFrame({"datetime": pd.date_range('1/1/2019', periods=sample_num, freq=freq),
                              "value": np.array(sample_num),
                              "id": np.array(['00']*sample_num),
                              "extra feature": np.random.randn(sample_num)})
@@ -97,7 +97,7 @@ def get_not_aligned_df():
     return df
 
 
-class TestTSDataset(ZooTestCase):
+class TestTSDataset(TestCase):
     def setup_method(self, method):
         pass
 
@@ -355,15 +355,16 @@ class TestTSDataset(ZooTestCase):
     def test_tsdata_roll_timeenc(self):
         horizon = random.randint(1, 9)
         lookback = random.randint(10, 20)
-        df = get_int_target_df()
-        tsdata = TSDataset.from_pandas(df, dt_col='datetime', target_col='value', id_col="id")
-        x, y, x_time, y_time =\
-            tsdata.roll(lookback=lookback, horizon=horizon,
-                        time_enc=True, label_len=lookback-horizon).to_numpy()
-        assert x.shape[1:] == (lookback, 1)
-        assert y.shape[1:] == (lookback, 1)
-        assert x_time.shape[1:] == (lookback, 3)
-        assert y_time.shape[1:] == (lookback, 3)
+        for freq in ["D", "2D"]:
+            df = get_int_target_df(freq=freq)
+            tsdata = TSDataset.from_pandas(df, dt_col='datetime', target_col='value', id_col="id")
+            x, y, x_time, y_time =\
+                tsdata.roll(lookback=lookback, horizon=horizon,
+                            time_enc=True, label_len=lookback-horizon).to_numpy()
+            assert x.shape[1:] == (lookback, 1)
+            assert y.shape[1:] == (lookback, 1)
+            assert x_time.shape[1:] == (lookback, 3)
+            assert y_time.shape[1:] == (lookback, 3)
 
     def test_tsdata_roll_timeenc_predict(self):
         horizon = 10
@@ -386,7 +387,7 @@ class TestTSDataset(ZooTestCase):
         df = get_int_target_df()
         tsdata = TSDataset.from_pandas(df, dt_col='datetime', target_col='value', id_col="id")
         dataloader =\
-            tsdata.to_torch_data_loader(roll=True, lookback=lookback, horizon=horizon,
+            tsdata.to_torch_data_loader(lookback=lookback, horizon=horizon,
                         time_enc=True, label_len=lookback-horizon)
         x, y, x_time, y_time = next(iter(dataloader))
         assert x.shape[1:] == (lookback, 1)
@@ -400,7 +401,7 @@ class TestTSDataset(ZooTestCase):
         df = get_int_target_df()
         tsdata = TSDataset.from_pandas(df, dt_col='datetime', target_col='value', id_col="id")
         dataloader =\
-            tsdata.to_torch_data_loader(roll=True, lookback=lookback, horizon=horizon,
+            tsdata.to_torch_data_loader(lookback=lookback, horizon=horizon,
                         time_enc=True, label_len=5, is_predict=True, batch_size=len(df))
         x, y, x_time, y_time = next(iter(dataloader))
         assert x.shape[1:] == (lookback, 1)
@@ -422,7 +423,6 @@ class TestTSDataset(ZooTestCase):
 
             # train
             torch_loader = tsdata.to_torch_data_loader(batch_size=batch_size,
-                                                       roll=True,
                                                        lookback=lookback,
                                                        horizon=horizon)
             for x_batch, y_batch in torch_loader:
@@ -432,7 +432,6 @@ class TestTSDataset(ZooTestCase):
 
             # test
             torch_loader = tsdata.to_torch_data_loader(batch_size=batch_size,
-                                                       roll=True,
                                                        lookback=lookback,
                                                        horizon=0)
             for x_batch in torch_loader:
@@ -441,7 +440,6 @@ class TestTSDataset(ZooTestCase):
 
             # specify feature_col
             torch_loader = tsdata.to_torch_data_loader(batch_size=batch_size,
-                                                       roll=True,
                                                        lookback=lookback,
                                                        horizon=horizon,
                                                        feature_col=[])
@@ -453,7 +451,6 @@ class TestTSDataset(ZooTestCase):
             # Non-subset relationship
             with pytest.raises(ValueError):
                 tsdata.to_torch_data_loader(batch_size=batch_size,
-                                            roll=True,
                                             lookback=lookback,
                                             horizon=horizon,
                                             target_col=['value', 'extra feature'])
@@ -461,7 +458,6 @@ class TestTSDataset(ZooTestCase):
             # specify horizon_list
             horizon_list = [1, 3, 5]
             torch_loader = tsdata.to_torch_data_loader(batch_size=batch_size,
-                                                       roll=True,
                                                        lookback=lookback,
                                                        horizon=horizon_list)
             for x_batch, y_batch in torch_loader:
@@ -473,7 +469,6 @@ class TestTSDataset(ZooTestCase):
             tsdata = TSDataset.from_pandas(df, dt_col="datetime",
                                            target_col=["value", "extra feature"], id_col="id")
             torch_loader = tsdata.to_torch_data_loader(batch_size=batch_size,
-                                                       roll=True,
                                                        lookback=lookback,
                                                        horizon=horizon)
             for x_batch, y_batch in torch_loader:
@@ -491,16 +486,27 @@ class TestTSDataset(ZooTestCase):
                                        extra_feature_col=["extra feature"], id_col="id")
 
         with pytest.raises(RuntimeError):
-            tsdata.to_torch_data_loader()
+            tsdata.to_torch_data_loader(roll=False)
 
         tsdata.roll(lookback=lookback, horizon=horizon)
         loader = tsdata.to_torch_data_loader(batch_size=batch_size,
+                                             roll=False,
                                              lookback=lookback,
                                              horizon=horizon)
         for x_batch, y_batch in loader:
             assert tuple(x_batch.size()) == (batch_size, lookback, 2)
             assert tuple(y_batch.size()) == (batch_size, horizon, 1)
             break
+
+    def test_tsdataset_to_torch_loader_lessthansample(self):
+        lookback = 96
+        horizon = 48
+        df = pd.DataFrame(np.random.randint(1, 10, size=(100, 1)), columns=["target"])
+        df.insert(0, "datetime", pd.date_range(start="2022-7-22", periods=100, freq="H"))
+        tsdata = TSDataset.from_pandas(df, dt_col="datetime", target_col="target")
+        with pytest.raises(RuntimeError):
+            tsdata.to_torch_data_loader(lookback=lookback, horizon=horizon)
+
 
     def test_tsdata_multi_unscale_numpy_torch_load(self):
         lookback = random.randint(1, 10)
@@ -525,7 +531,6 @@ class TestTSDataset(ZooTestCase):
             tsdata.scale(stand, fit=tsdata is tsdata_train)
 
         test_loader = tsdata_test.to_torch_data_loader(batch_size=batch_size,
-                                                       roll=True,
                                                        lookback=lookback,
                                                        horizon=horizon)
         import torch

@@ -77,7 +77,7 @@ class TestOnnx(TestCase):
         train_loader = DataLoader(ds, batch_size=2)
         trainer.fit(pl_model, train_loader)
 
-        onnx_model = trainer.trace(pl_model, accelerator="onnxruntime")
+        onnx_model = trainer.trace(pl_model, accelerator="onnxruntime", input_sample=train_loader)
 
         for x, y in train_loader:
             model.eval()
@@ -85,6 +85,9 @@ class TestOnnx(TestCase):
                 forward_res_pytorch = pl_model(x).numpy()
             forward_res_onnx = onnx_model(x).numpy()
             np.testing.assert_almost_equal(forward_res_onnx, forward_res_pytorch, decimal=5)
+
+        trainer.validate(onnx_model, train_loader)
+        trainer.test(onnx_model, train_loader)
 
     def test_trainer_trace_multiple_input_onnx(self):
         model = MultiInputModel()
@@ -100,7 +103,7 @@ class TestOnnx(TestCase):
         train_loader = DataLoader(TensorDataset(x1, x2, y), batch_size=32, shuffle=True)
         trainer.fit(pl_model, train_loader)
 
-        onnx_model = trainer.trace(pl_model, accelerator="onnxruntime")
+        onnx_model = trainer.trace(pl_model, accelerator="onnxruntime", input_sample=train_loader)
 
         for x1, x2, y in train_loader:
             model.eval()
@@ -108,6 +111,10 @@ class TestOnnx(TestCase):
                 forward_res_pytorch = pl_model(x1, x2).numpy()
             forward_res_onnx = onnx_model(x1, x2).numpy()
             np.testing.assert_almost_equal(forward_res_onnx, forward_res_pytorch, decimal=5)
+
+        trainer.validate(onnx_model, train_loader)
+        trainer.test(onnx_model, train_loader)
+        trainer.predict(onnx_model, train_loader)
 
     def test_onnx_trainer_save_load(self):
         model = ResNet18(10, pretrained=False, include_top=False, freeze=True)
@@ -122,7 +129,7 @@ class TestOnnx(TestCase):
         train_loader = DataLoader(ds, batch_size=2)
         trainer.fit(pl_model, train_loader)
 
-        onnx_model = trainer.trace(pl_model, accelerator="onnxruntime")
+        onnx_model = trainer.trace(pl_model, accelerator="onnxruntime", input_sample=train_loader)
 
         with tempfile.TemporaryDirectory() as tmp_dir_name:
             Trainer.save(onnx_model, tmp_dir_name)

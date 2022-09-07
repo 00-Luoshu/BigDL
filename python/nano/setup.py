@@ -32,9 +32,9 @@ VERSION = open(os.path.join(BIGDL_PYTHON_HOME, 'version.txt'), 'r').read().strip
 
 
 lib_urls = [
-    "https://github.com/yangw1234/jemalloc/releases/download/v5.2.1-binary/libjemalloc.so",
-    "https://github.com/leonardozcm/libjpeg-turbo/releases/download/2.1.1/libturbojpeg.so.0.2.0",
-    "https://github.com/leonardozcm/tcmalloc/releases/download/v1/libtcmalloc.so"
+    "https://github.com/analytics-zoo/jemalloc/releases/download/v5.3.0/libjemalloc.so",
+    "https://github.com/analytics-zoo/libjpeg-turbo/releases/download/v2.1.4/libturbojpeg.so.0.2.0",
+    "https://github.com/analytics-zoo/tcmalloc/releases/download/v1/libtcmalloc.so"
 ]
 
 
@@ -72,14 +72,14 @@ def setup_package():
 
     pytorch_requires = ["torch==1.11.0",
                         "torchvision==0.12.0",
-                        "pytorch_lightning==1.4.2",
+                        "pytorch_lightning==1.6.4",
                         "torchmetrics==0.7.2",
                         "opencv-python-headless",
                         "PyTurboJPEG",
                         "opencv-transforms",
                         "intel_extension_for_pytorch==1.11.0"]
 
-    install_requires = ["intel-openmp", "cloudpickle", "protobuf==3.20.1"]
+    install_requires = ["intel-openmp", "cloudpickle", "protobuf==3.19.4"]
 
     package_data = [
         "libs/libjemalloc.so",

@@ -39,7 +39,7 @@ import java.util.function.Function;
 public class GrpcClientBase extends AbstractGrpcBase {
     protected static final Logger logger = LogManager.getLogger(GrpcClientBase.class.getName());
     protected String target = "localhost:8980";
-    protected final String clientUUID;
+    protected String clientUUID;
     protected String privateKeyFilePath;
     protected ManagedChannel channel;
 
@@ -78,7 +78,6 @@ public class GrpcClientBase extends AbstractGrpcBase {
     }
 
     public void build() throws IOException {
-        parseConfig();
         if (channel == null) {
             if(privateKeyFilePath == null) {
                 channel = ManagedChannelBuilder.forTarget(target)

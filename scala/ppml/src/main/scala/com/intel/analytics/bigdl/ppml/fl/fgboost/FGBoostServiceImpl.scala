@@ -16,10 +16,13 @@
 
 package com.intel.analytics.bigdl.ppml.fl.fgboost
 
+import com.intel.analytics.bigdl.dllib.utils.Log4Error
+import com.intel.analytics.bigdl.ppml.fl.FLConfig
 import com.intel.analytics.bigdl.ppml.fl.base.DataHolder
 import com.intel.analytics.bigdl.ppml.fl.common.FLPhase
 import com.intel.analytics.bigdl.ppml.fl.generated.FGBoostServiceGrpc
 import com.intel.analytics.bigdl.ppml.fl.generated.FGBoostServiceProto._
+import com.intel.analytics.bigdl.ppml.fl.utils.ServerUtils
 import io.grpc.stub.StreamObserver
 import org.apache.commons.lang3.exception.ExceptionUtils
 import org.apache.logging.log4j.LogManager
@@ -29,14 +32,15 @@ import java.util.concurrent.ConcurrentHashMap
 import collection.JavaConverters._
 
 
-class FGBoostServiceImpl(clientNum: Int) extends FGBoostServiceGrpc.FGBoostServiceImplBase{
+class FGBoostServiceImpl(clientNum: Int, config: FLConfig)
+  extends FGBoostServiceGrpc.FGBoostServiceImplBase{
   val logger = LogManager.getLogger(getClass)
-  val aggregator = new FGBoostAggregator()
+  val aggregator = new FGBoostAggregator(config)
   aggregator.setClientNum(clientNum)
 
   // store client id as key and client data as value
-  val evalBufferMap = new ConcurrentHashMap[String, util.ArrayList[BoostEval]]()
-  var predBufferMap = new ConcurrentHashMap[String, util.ArrayList[BoostEval]]()
+  val evalBufferMap = new ConcurrentHashMap[Int, util.ArrayList[BoostEval]]()
+  var predBufferMap = new ConcurrentHashMap[Int, util.ArrayList[BoostEval]]()
 
   override def downloadLabel(request: DownloadLabelRequest,
                              responseObserver: StreamObserver[DownloadResponse]): Unit = {
@@ -70,6 +74,9 @@ class FGBoostServiceImpl(clientNum: Int) extends FGBoostServiceGrpc.FGBoostServi
   override def uploadLabel(request: UploadLabelRequest,
                            responseObserver: StreamObserver[UploadResponse]): Unit = {
     val clientUUID = request.getClientuuid
+    Log4Error.invalidInputError(ServerUtils.checkClientId(clientNum, clientUUID),
+      s"Invalid client ID, should be in range of [1, $clientNum], got $clientUUID")
+
     val data = request.getData
     val version = data.getMetaData.getVersion
     try {
@@ -92,6 +99,8 @@ class FGBoostServiceImpl(clientNum: Int) extends FGBoostServiceGrpc.FGBoostServi
   override def split(request: SplitRequest,
                      responseObserver: StreamObserver[SplitResponse]): Unit = {
     val clientUUID = request.getClientuuid
+    Log4Error.invalidInputError(ServerUtils.checkClientId(clientNum, clientUUID),
+      s"Invalid client ID, should be in range of [1, $clientNum], got $clientUUID")
     val split = request.getSplit
     try {
       aggregator.putClientData(FLPhase.SPLIT, clientUUID, split.getVersion, new DataHolder(split))
@@ -122,6 +131,8 @@ class FGBoostServiceImpl(clientNum: Int) extends FGBoostServiceGrpc.FGBoostServi
   override def uploadTreeLeaf(request: UploadTreeLeafRequest,
                               responseObserver: StreamObserver[UploadResponse]): Unit = {
     val clientUUID = request.getClientuuid
+    Log4Error.invalidInputError(ServerUtils.checkClientId(clientNum, clientUUID),
+      s"Invalid client ID, should be in range of [1, $clientNum], got $clientUUID")
     val treeLeaf = request.getTreeLeaf
 
     try {
@@ -144,6 +155,8 @@ class FGBoostServiceImpl(clientNum: Int) extends FGBoostServiceGrpc.FGBoostServi
   override def evaluate(request: EvaluateRequest,
                         responseObserver: StreamObserver[EvaluateResponse]): Unit = {
     val clientUUID = request.getClientuuid
+    Log4Error.invalidInputError(ServerUtils.checkClientId(clientNum, clientUUID),
+      s"Invalid client ID, should be in range of [1, $clientNum], got $clientUUID")
     val version = request.getVersion
     logger.debug(s"Server received Evaluate request of version: $version")
     if (!evalBufferMap.containsKey(clientUUID)) {
@@ -203,6 +216,8 @@ class FGBoostServiceImpl(clientNum: Int) extends FGBoostServiceGrpc.FGBoostServi
   override def predict(request: PredictRequest,
                        responseObserver: StreamObserver[PredictResponse]): Unit = {
     val clientUUID = request.getClientuuid
+    Log4Error.invalidInputError(ServerUtils.checkClientId(clientNum, clientUUID),
+      s"Invalid client ID, should be in range of [1, $clientNum], got $clientUUID")
     val predicts: java.util.List[BoostEval] = request.getTreeEvalList
     // TODO: add same logic with evaluate
     try {
@@ -232,5 +247,42 @@ class FGBoostServiceImpl(clientNum: Int) extends FGBoostServiceGrpc.FGBoostServi
     }
   }
 
+  override def saveServerModel(request: SaveModelRequest,
+                               responseObserver: StreamObserver[SaveModelResponse]): Unit = {
+    try {
+      aggregator.saveModel(request.getModelPath)
+      val response = "Save model on server successfully"
+      responseObserver.onNext(
+        SaveModelResponse.newBuilder.setMessage(response).setCode(1).build)
+      responseObserver.onCompleted()
+    } catch {
+      case e: Exception =>
+        val error = e.getStackTrace.map(_.toString).mkString("\n")
+        logger.error(e.getMessage + "\n" + error)
+        val response = SaveModelResponse.newBuilder.setMessage(e.getMessage).setCode(1).build
+        responseObserver.onNext(response)
+        responseObserver.onCompleted()
+    }
+
+  }
+
+  override def loadServerModel(request: LoadModelRequest,
+                               responseObserver: StreamObserver[LoadModelResponse]): Unit = {
+    try {
+      aggregator.loadModel(request.getModelPath)
+      val response = "Save model on server successfully"
+      responseObserver.onNext(
+        LoadModelResponse.newBuilder.setMessage(response).setCode(1).build)
+      responseObserver.onCompleted()
+    } catch {
+      case e: Exception =>
+        val error = e.getStackTrace.map(_.toString).mkString("\n")
+        logger.error(e.getMessage + "\n" + error)
+        val response = LoadModelResponse.newBuilder.setMessage(e.getMessage).setCode(1).build
+        responseObserver.onNext(response)
+        responseObserver.onCompleted()
+    }
+
+  }
 
 }
